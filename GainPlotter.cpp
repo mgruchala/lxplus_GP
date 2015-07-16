@@ -1,0 +1,695 @@
+//
+//  GainPlotter.cpp
+//  
+//
+//  Created by Brian L Dorney on 04/05/15.
+//
+//
+
+//C++ Includes
+#include <algorithm>
+#include <iostream>
+#include <fstream>
+#include <stdio.h>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
+
+//ROOT Includes
+#include "TAxis.h"
+#include "TCanvas.h"
+#include "TF1.h"
+#include "TFile.h"
+#include "TGaxis.h"
+#include "TGraph.h"
+#include "TGraphErrors.h"
+#include "TH1.h"
+#include "TH1F.h"
+#include "TLatex.h"
+#include "TLegend.h"
+#include "TPad.h"
+
+using std::cout;
+using std::endl;
+using std::ifstream;
+using std::string;
+using std::vector;
+
+using namespace ROOT;
+
+//Container for Info Pave Information
+struct DetInfo{
+    float fYAxis_Min;
+    float fYAxis_Max;
+    
+    string strGapConfig;
+    
+    string strGas;
+    
+    string strName;
+    
+    string strPressure;
+    
+    string strSource;
+    vector<string> vec_strSourceInfo;
+    
+    string strTemp;
+    
+    DetInfo(){
+        fYAxis_Min = 1e-1;
+        fYAxis_Max = 1e5;
+    };
+};
+
+//Container for Data Points
+struct Data{
+    //Set Point
+    float fImon;
+    float fVDrift;
+    
+    //Gain
+    float fGain;
+    float fGain_Err;
+    
+    //Rate
+    float fRate;
+    float fRate_Err;
+};
+
+//Comparator for STL objects templating the Data struct
+struct compare_data{
+    bool operator() (const Data &point1, const Data &point2) const
+    {
+        return (point1.fImon < point2.fImon );
+    }
+} cmp;
+
+//Parses lines from input info section and returns pairs properly
+std::pair<string,string> getParsedLine(string strInputLine, bool &bExitSuccess){
+    //Variable Declaration
+    int iPos_Equals = strInputLine.find("=",0);
+    int iPos_End    = strInputLine.find(";",0);
+    int iPos_Quote1 = strInputLine.find("'",0); //Position of first single-quote
+    int iPos_Quote2 = strInputLine.rfind("'");  //Position of last single-quite
+    
+    string strFieldName;
+    string strFieldValue;
+    
+    //Check to make sure iPos_Equals found in input string
+    if (iPos_Equals == std::string::npos && strInputLine.find("[",0) == std::string::npos ) {
+        cout<<"Character '=' Not Found in line:\n";
+        cout<<strInputLine<<endl;
+        cout<<"Exiting getParsedLine(), Cross-Check Selcetion Setup File\n";
+        
+        bExitSuccess = false;
+        
+        return std::make_pair("","");
+    }
+    
+    //Check to make sure iPos_End found in input string
+    if (iPos_End == std::string::npos && strInputLine.find("[",0) == std::string::npos) {
+        cout<<"Character ';' Not Found in line:\n";
+        cout<<strInputLine<<endl;
+        cout<<"Exiting getParsedLine(), Cross-Check Selcetion Setup File\n";
+        
+        bExitSuccess = false;
+        
+        return std::make_pair("","");
+    }
+    
+    //Check to make sure iPos_Quote1 found in input string
+    if (iPos_Quote1 == std::string::npos && strInputLine.find("[",0) == std::string::npos) {
+        cout<<"First Single-Quote (e.g. ' ) Not Found in line:\n";
+        cout<<strInputLine<<endl;
+        cout<<"Exiting getParsedLine(), Cross-Check Selcetion Setup File\n";
+        
+        bExitSuccess = false;
+        
+        return std::make_pair("","");
+    }
+    
+    //Check to make sure iPos_Quote2 found in input string
+    if (iPos_Quote2 == std::string::npos && strInputLine.find("[",0) == std::string::npos) {
+        cout<<"Last Single-Quote (e.g. ' ) Not Found in line:\n";
+        cout<<strInputLine<<endl;
+        cout<<"Exiting getParsedLine(), Cross-Check Selcetion Setup File\n";
+        
+        bExitSuccess = false;
+        
+        return std::make_pair("","");
+    }
+    
+    //Get the Strings
+    strFieldName    = strInputLine.substr(0,iPos_Equals);
+    //strFieldValue   = strInputLine.substr(iPos_Equals+1, iPos_End - iPos_Equals - 1);
+    strFieldValue   = strInputLine.substr(iPos_Quote1+1, iPos_Quote2 - iPos_Quote1 - 1);
+    
+    //Set the Exit Flag
+    bExitSuccess = true;
+    
+    //Return the Pair
+    return std::make_pair(strFieldName,strFieldValue);
+} //End getParsedLine()
+
+//Prints All Bit Flags for an input ifstream
+void printStreamStatus(ifstream &inputStream){
+    std::cout << "Input File Stream Bit Status:\n";
+    std::cout << " good()=" << inputStream.good() << endl;
+    std::cout << " eof()=" << inputStream.eof() << endl;
+    std::cout << " fail()=" << inputStream.fail() << endl;
+    std::cout << " bad()=" << inputStream.bad() << endl;
+    
+    return;
+} //End treeProducerTDC::printStreamStatus()
+
+//Gets the Data
+vector<Data> getData(string strInputFileName, bool bVerbose_IO){
+    //Variable Declaration
+    Data dPoint;
+    
+    vector<Data> ret_Data;
+    
+    string strLine;
+    
+    //Open the input file
+    //Open the Data File
+    //------------------------------------------------------
+    if (bVerbose_IO) { //Case: User Requested Verbose Error Messages - I/O
+        cout<< "getDetInfo(): trying to open and read: " << strInputFileName << endl;
+    } //End Case: User Requested Verbose Error Messages - I/O
+    
+    ifstream file_Input(strInputFileName.c_str() );
+    
+    //Check to See if Data File Opened Successfully
+    //------------------------------------------------------
+    if (!file_Input.is_open() && bVerbose_IO) {
+        perror( ("getDetInfo(): error while opening file: " + strInputFileName).c_str() );
+        printStreamStatus(file_Input);
+    }
+    
+    //Loop Through Data File
+    //Check for faults immediately afterward
+    while ( getline(file_Input, strLine) ) {
+        //Skip Commented Lines
+        if (strLine.compare(0,1,"#") == 0) continue;
+        
+        //Check for start of Data header
+        if (strLine.compare("[BEGIN_DATA]") == 0) { //Case: Data Header Started
+            cout<<"getData(): Data header found!\n";
+            
+            //Get Data Point
+            while (file_Input>>dPoint.fImon>>dPoint.fVDrift>>dPoint.fGain>>dPoint.fGain_Err>>dPoint.fRate>>dPoint.fRate_Err) {ret_Data.push_back(dPoint);}
+            
+            //Has the Header Ended?
+            if (strLine.compare("[END_DATA]") == 0) { //Case: Data Header Ended
+                if (bVerbose_IO) { //Case: User Requested Verbose Input/Output
+                    cout<<"getData(): End of data header reached!\n";
+                    cout<<"getData(): The following information has been logged:\n";
+                    cout<<  "\tImon\tVDrift\tGain\tGain_Err\tRate\tRate_Err\n";
+                    
+                    //Loop Over stored Data
+                    for (int i=0; i<ret_Data.size(); ++i) {
+                        cout<<  "\t" << ret_Data[i].fImon << "\t" << ret_Data[i].fVDrift << "\t" << ret_Data[i].fGain << "\t" << ret_Data[i].fGain_Err << "\t" << ret_Data[i].fRate << "\t" << ret_Data[i].fRate_Err << endl;
+                    } //End Loop Over ret_Data
+                } //End Case: User Requested Verbose Input/Output
+                
+                break;
+            } //End Case: Data Header Ended
+        } //End Case: Data Header Started
+    } //End Loop Over File
+    if ( file_Input.bad() && bVerbose_IO) {
+        perror( ("getDetInfo(): error while reading file: " + strInputFileName).c_str() );
+        printStreamStatus(file_Input);
+    }
+    
+    file_Input.close();
+    
+    return ret_Data;
+} //End getData()
+
+//Sets the Detector Info
+DetInfo getDetInfo(string strInputFileName, bool bVerbose_IO){
+    //Variable Declaration
+    DetInfo ret_Info;
+    
+    std::pair<string, string> pair_Param;
+    
+    string strLine;
+    
+    //Open the input file
+    //Open the Data File
+    //------------------------------------------------------
+    if (bVerbose_IO) { //Case: User Requested Verbose Error Messages - I/O
+        cout<< "getDetInfo(): trying to open and read: " << strInputFileName << endl;
+    } //End Case: User Requested Verbose Error Messages - I/O
+    
+    ifstream file_Input(strInputFileName.c_str() );
+    
+    //Check to See if Data File Opened Successfully
+    //------------------------------------------------------
+    if (!file_Input.is_open() && bVerbose_IO) {
+        perror( ("getDetInfo(): error while opening file: " + strInputFileName).c_str() );
+        printStreamStatus(file_Input);
+    }
+    
+    //Loop Through Data File
+    //Check for faults immediately afterward
+    //------------------------------------------------------
+    while ( getline(file_Input, strLine) ) { //Loop Over Input File
+        //Skip Commented Lines
+        if (strLine.compare(0,1,"#") == 0) continue;
+        
+        //Check for Start of Info Header
+        if (strLine.compare("[BEGIN_DET_INFO]") == 0 ) { //Case: Info Header Found!
+            cout<<"getDetInfo(): Info header found!\n";
+            
+            while (getline(file_Input, strLine) ) { //Loop Through Info Header
+                bool bExitSuccess;
+                
+                //Skip Commented Lines
+                if (strLine.compare(0,1,"#") == 0) continue;
+        
+                //Has the Header Ended?
+                if (strLine.compare("[END_DET_INFO]") == 0) { //Case: End of Info Header
+                    if (bVerbose_IO) { //Case: User Requested Verbose Input/Output
+                        cout<<"getDetInfo(): End of info header reached!\n";
+                        cout<<"getDetInfo(): The following information has been logged:\n";
+                        cout<<  "\tDetector = " << ret_Info.strName << endl;
+                        cout<<  "\tGap Config = " << ret_Info.strGapConfig << endl;
+                        cout<<  "\tSource = " << ret_Info.strSource << endl;
+                        
+                        for (int i=0; i < ret_Info.vec_strSourceInfo.size(); ++i) {
+                            cout<<"\t\tSource Info = " << ret_Info.vec_strSourceInfo[i] << endl;
+                        }
+                        
+                        cout<<  "\tGas = " << ret_Info.strGas << endl;
+                        cout<<  "\t Ambient P = " << ret_Info.strPressure << endl;
+                        cout<<  "\t Ambient T = " << ret_Info.strTemp << endl;
+                    } //End Case: User Requested Verbose Input/Output
+                    
+                    break;
+                } //End Case: End of Info Header
+                
+                //Get Parameter Pairing
+                pair_Param = getParsedLine(strLine, bExitSuccess);
+                
+                if (bExitSuccess) { //Case: Parameter Fetched Successfully
+                    if( pair_Param.first.compare("Gaps") == 0 ){            ret_Info.strGapConfig   = pair_Param.second;}
+                    else if( pair_Param.first.compare("Gas") == 0 ){        ret_Info.strGas         = pair_Param.second;}
+                    else if( pair_Param.first.compare("Detector") == 0 ) {  ret_Info.strName        = pair_Param.second;}
+                    else if( pair_Param.first.compare("Pressure") == 0 ){   ret_Info.strPressure    = pair_Param.second;}
+                    else if( pair_Param.first.compare("Source") == 0 ){     ret_Info.strSource      = pair_Param.second;}
+                    else if( pair_Param.first.compare("SourceInfo") == 0 ){ ret_Info.vec_strSourceInfo.push_back(pair_Param.second);}
+                    else if( pair_Param.first.compare("Temperature") == 0 ){ret_Info.strTemp        = pair_Param.second;}
+                    else if( pair_Param.first.compare("Y_Range_Min") == 0 ){
+                        if (pair_Param.second.find_first_not_of( "0123456789.e+-" ) == string::npos ) {
+                            ret_Info.fYAxis_Min = std::stof(pair_Param.second);
+                        }
+                        else{
+                            cout<<"getDetInfo() - Non-numeric input for field: " << pair_Param.first << endl;
+                            cout<<"getDetInfo() - Input: " << pair_Param.second << " not recognized!\n";
+                            cout<<"getDetInfo() - Using default assignment: " << ret_Info.fYAxis_Min << endl;
+                        }
+                    }
+                    else if( pair_Param.first.compare("Y_Range_Max") == 0 ){
+                        if (pair_Param.second.find_first_not_of( "0123456789.e+-" ) == string::npos ) {
+                            ret_Info.fYAxis_Max = std::stof(pair_Param.second);
+                        }
+                        else{
+                            cout<<"getDetInfo() - Non-numeric input for field: " << pair_Param.first << endl;
+                            cout<<"getDetInfo() - Input: " << pair_Param.second << " not recognized!\n";
+                            cout<<"getDetInfo() - Using default assignment: " << ret_Info.fYAxis_Max << endl;
+                        }
+                    }
+                    else{ //Case: Input Not Recognized
+                        cout<<"getDetInfo() - Unrecognized field!!!\n";
+                        cout<<("getDetInfo() - " + pair_Param.first + " = " + pair_Param.second ).c_str() << endl;
+                        cout<<"getDetInfo() - Please cross-check input file:" << strInputFileName << endl;
+                    } //End Case: Input Not Recognized
+                } //End Case: Parameter Fetched Successfully
+            } //End Loop Through Info Header
+        } //End Case: Info Header Found!
+    } //End Loop Over Input File
+    if ( file_Input.bad() && bVerbose_IO) {
+        perror( ("getDetInfo(): error while reading file: " + strInputFileName).c_str() );
+        printStreamStatus(file_Input);
+    }
+    
+    file_Input.close();
+    
+    return ret_Info;
+} //End getDetInfo()
+
+//Returns a TFile
+TFile * getFile(string strInputFileName, string strInputOption, bool &bExitSuccess, bool bVerbose_IO){
+    //Open the Input Data File
+    //------------------------------------------------------
+    if (bVerbose_IO) { //Case: User Requested Verbose Error Messages - I/O
+        cout<< "getFile(): trying to open and read: " << strInputFileName << endl;
+    } //End Case: User Requested Verbose Error Messages - I/O
+    
+    //Declaration the File
+    TFile * ret_File = new TFile(strInputFileName.c_str(), strInputOption.c_str(), "", 1);
+    
+    //Check to See if Data File Opened Successfully
+    //------------------------------------------------------
+    if ( !ret_File->IsOpen() || ret_File->IsZombie() ) { //Case: File Failed To Open Successfully
+        if (bVerbose_IO) {
+            perror( ("getFile(): error while opening file: " + strInputFileName).c_str() );
+            std::cout << "Input ROOT File Status:\n";
+            std::cout << " IsOpen()=" << ret_File->IsOpen() << endl;
+            std::cout << " IsZombie()=" << ret_File->IsZombie() << endl;
+        }
+        
+        bExitSuccess = false;
+    } //End Case: File Failed To Open Successfully
+    else{ //Case: File Opened Successfully
+        if (bVerbose_IO) {
+            std::cout << ("getFile(): file " + strInputFileName + " opened successfully!").c_str() << endl;
+            std::cout << "Input ROOT File Status:\n";
+            std::cout << " IsOpen()=" << ret_File->IsOpen() << endl;
+            std::cout << " IsZombie()=" << ret_File->IsZombie() << endl;
+        }
+        
+        bExitSuccess = true;
+    } //End Case: File Opened Successfully
+    
+    return ret_File;
+} //End getFile()
+
+//template function to transform an input data type to string
+template<class T>
+string getString(T input){
+    std::stringstream sstream;
+    sstream<<input;
+    return sstream.str();
+} //End getString()
+
+//Input Arguments
+//  1 -> Input File Name
+//  2 -> Verbose Printing Mode
+int main( int argc_, char * argv_[] ){
+    //Variable Declaration
+    //------------------------------------------------------
+    bool bVerbose_IO;
+    bool bExitSuccess;
+    
+    DetInfo dInfo;
+    
+    string strInputFileName;
+    
+    vector<Data> vec_InputData;
+    vector<string> vec_strInputArgs;
+    
+    //cout<<"vec_strInputArgs.size() = " << vec_strInputArgs.size() << endl;
+    
+    //Transfer Input Arguments into vec_strInputArgs
+    //------------------------------------------------------
+    vec_strInputArgs.resize(argc_);
+    std::copy(argv_, argv_ + argc_, vec_strInputArgs.begin() );
+    
+    //cout<<"vec_strInputArgs.size() = " << vec_strInputArgs.size() << endl;
+    
+    //User Asks for "Help"
+    //------------------------------------------------------
+    if (vec_strInputArgs.size() == 2) {
+        if (vec_strInputArgs[1].compare("-h") == 0 ) {
+            cout<<"GainPlotter v1.0\n";
+            cout<<"Author: Brian Dorney\n";
+            cout<<"Usage: ./GainPlotter <InputFileName> <Verbose Mode: true/false>\n";
+            cout<<"Format of expected input file (omitting tabs and angle brackets, i.e. <, and >):\n";
+            cout<<"#-----Start of File-----\n";
+            cout<<"\t[BEGIN_DET_INFO]\n";
+            cout<<"\tDetector='<DET NAME>';\n";
+            cout<<"\tGaps='<GAP CONFIG>';\n";
+            cout<<"\tSource='<RADIOACTIVE SOURCE>';\n";
+            cout<<"\tSourceInfo='<SOURCE INFO>'; #Duplicate this line for multiple source input\n";
+            cout<<"\tGas='<GAS>';\n";
+            cout<<"\tPressure='<AMBIENT PRESSURE>';\n";
+            cout<<"\tTemperature='<AMBIENT TEMPERATURE>';\n";
+            cout<<"\tY_Range_Min='<MINIMUM>'; #Minimum Gain Value for Y-Axis\n";
+            cout<<"\tY_Range_Max='<MAXIMUM>'; #Maximum Gain Value for Y-Axis\n";
+            cout<<"\t[END_DET_INFO]\n";
+            cout<<"\t[BEGIN_DATA]\n";
+            cout<<"\tImon\tVDrift\tGain\tGain_Err\tRate\tRate_Err\n";
+            cout<<"\tImon\tVDrift\tGain\tGain_Err\tRate\tRate_Err\n";
+            cout<<"\t...\n";
+            cout<<"\t...\n";
+            cout<<"\t...\n";
+            cout<<"\tImon\tVDrift\tGain\tGain_Err\tRate\tRate_Err\n";
+            cout<<"\tImon\tVDrift\tGain\tGain_Err\tRate\tRate_Err\n";
+            cout<<"\t[END_DATA]\n";
+            cout<<"#-----End of File-----\n";
+            cout<<"The '#' symbol is recognized as a comment indication\n";
+            
+            return 1;
+        }
+    }
+    
+    //Exit if the number of input parameters does not match expectation;
+    //------------------------------------------------------
+    if (vec_strInputArgs.size() != 3) {
+        cout<<"main() - Expected two additional input parameters!!!\n";
+        cout<<"main() - Parameters given:\n";
+        for (int i=0; i < vec_strInputArgs.size(); ++i) {
+            cout<<"\t" << vec_strInputArgs[i] << endl;
+        }
+        cout<<"main() - Please Re-run with expected parameter input";
+        
+        return -1;
+    } //End Case: Parameter Input Does Not Meet Expectation
+    
+    //Get Detector Info
+    //------------------------------------------------------
+    (vec_strInputArgs[2].compare("true") == 0 || vec_strInputArgs[2].compare("True") == 0 || vec_strInputArgs[2].compare("1") == 0) ? bVerbose_IO = true : bVerbose_IO = false;
+    
+    dInfo = getDetInfo(vec_strInputArgs[1],bVerbose_IO);
+    
+    //Get Input Data
+    //------------------------------------------------------
+    vec_InputData = getData(vec_strInputArgs[1],bVerbose_IO);   //NOTE: function needs to be coded up
+    
+    //Make Plots
+    //------------------------------------------------------
+    //Sort Collection from smallest to highest detector current
+    std::sort(vec_InputData.begin(), vec_InputData.end(), cmp);
+    
+    //Plot for secondary x-axis map
+    TGraph *graph_Imon_v_VDrift = new TGraph( vec_InputData.size() );                  graph_Imon_v_VDrift->SetName("graph_Imon_v_VDrift");         graph_Imon_v_VDrift->SetTitle("");
+    
+    //Plots for storage
+    TGraphErrors *graph_DetGain_v_Imon = new TGraphErrors( vec_InputData.size() );     graph_DetGain_v_Imon->SetName("graph_DetGain_v_Imon");       graph_DetGain_v_Imon->SetTitle("");
+    TGraphErrors *graph_DetRate_v_Imon = new TGraphErrors( vec_InputData.size() );     graph_DetRate_v_Imon->SetName("graph_DetRate_v_Imon");       graph_DetRate_v_Imon->SetTitle("");
+    
+    TGraphErrors *graph_DetGain_v_VDrift = new TGraphErrors( vec_InputData.size() );   graph_DetGain_v_VDrift->SetName("graph_DetGain_v_VDrift");   graph_DetGain_v_VDrift->SetTitle("");
+    TGraphErrors *graph_DetRate_v_VDrift = new TGraphErrors( vec_InputData.size() );   graph_DetRate_v_VDrift->SetName("graph_DetRate_v_VDrift");   graph_DetRate_v_VDrift->SetTitle("");
+    
+    //Set Points
+    for (int i=0; i<vec_InputData.size(); i++) { //Loop Over vec_InputData
+        //graph_VDrift_v_Imon->SetPoint(i, vec_InputData[i].fImon, vec_InputData[i].fVDrift );
+        graph_Imon_v_VDrift->SetPoint(i, vec_InputData[i].fVDrift, vec_InputData[i].fImon );
+        
+        //Versus Imon
+        graph_DetGain_v_Imon->SetPoint(i, vec_InputData[i].fImon, vec_InputData[i].fGain);
+        graph_DetGain_v_Imon->SetPointError(i, 0, vec_InputData[i].fGain_Err);
+        
+        graph_DetRate_v_Imon->SetPoint(i, vec_InputData[i].fImon, vec_InputData[i].fRate);
+        graph_DetRate_v_Imon->SetPointError(i, 0, vec_InputData[i].fRate_Err);
+        
+        //Versus VDrift
+        graph_DetGain_v_VDrift->SetPoint(i, vec_InputData[i].fVDrift, vec_InputData[i].fGain);
+        graph_DetGain_v_VDrift->SetPointError(i, 0, vec_InputData[i].fGain_Err);
+        
+        graph_DetRate_v_VDrift->SetPoint(i, vec_InputData[i].fVDrift, vec_InputData[i].fRate);
+        graph_DetRate_v_VDrift->SetPointError(i, 0, vec_InputData[i].fRate_Err);
+    } //End Loop Over vec_InputData
+    
+    //Make Axis Link
+    TF1 *func_Imon_v_VDrift = new TF1("func_Imon_v_VDrift","[0]*x+[1]", (*std::min_element(vec_InputData.begin(), vec_InputData.end(), cmp) ).fVDrift, (*std::max_element(vec_InputData.begin(), vec_InputData.end(), cmp) ).fVDrift );
+    graph_Imon_v_VDrift->Fit(func_Imon_v_VDrift);
+    
+    //Make Exponential Gain Curves
+    TF1 *func_Gain_v_Imon = new TF1("func_Gain_v_Imon","expo", (*std::min_element(vec_InputData.begin(), vec_InputData.end(), cmp) ).fImon, (*std::max_element(vec_InputData.begin(), vec_InputData.end(), cmp) ).fImon );
+    TF1 *func_Gain_v_VDrift = new TF1("func_Gain_v_VDrift","expo", (*std::min_element(vec_InputData.begin(), vec_InputData.end(), cmp) ).fVDrift, (*std::max_element(vec_InputData.begin(), vec_InputData.end(), cmp) ).fVDrift );
+    
+    cout<<"=============================Imon=============================\n";
+    graph_DetGain_v_Imon->Fit( func_Gain_v_Imon, "N" );
+    
+    cout<<"=============================VDrift=============================\n";
+    graph_DetGain_v_VDrift->Fit( func_Gain_v_VDrift, "N" );
+    
+    //Draw Gain Plot
+    //------------------------------------------------------
+    //Set Style - Gain Graph
+    graph_DetGain_v_Imon->GetYaxis()->SetRangeUser(dInfo.fYAxis_Min,dInfo.fYAxis_Max);
+    graph_DetGain_v_Imon->GetYaxis()->SetTitle("Effective Gain");
+    graph_DetGain_v_Imon->GetYaxis()->SetTitleOffset(1.25);
+    
+    graph_DetGain_v_Imon->GetXaxis()->SetTitle("HV Divider Current #left(#muA#right)");
+    
+    graph_DetGain_v_Imon->SetLineColor(kBlack);
+    graph_DetGain_v_Imon->SetLineWidth(2);
+    
+    graph_DetGain_v_Imon->SetMarkerColor(kBlack);
+    graph_DetGain_v_Imon->SetMarkerStyle(21);
+    
+    //Set Style - Gain Func
+    func_Gain_v_Imon->SetLineColor(kBlack);
+    func_Gain_v_Imon->SetLineWidth(4);
+    func_Gain_v_Imon->SetLineStyle(7);
+    
+    //Set Style - Canvas
+    TCanvas *cDetector = new TCanvas("cDetector","Gain & Rate Plot",700,700);
+    cDetector->cd()->SetGridy();
+    cDetector->cd()->SetLogy(1);
+    cDetector->cd()->SetRightMargin(0.125);
+    cDetector->Update();
+    
+    //Draw the Gain Plot
+    cDetector->cd();
+    graph_DetGain_v_Imon->Draw("ap");
+    func_Gain_v_Imon->Draw("same");
+    
+    //Create and draw the secondary x-axis
+    TGaxis *axis_VDrift = new TGaxis(
+        graph_DetGain_v_Imon->GetHistogram()->GetBinLowEdge(graph_DetGain_v_Imon->GetHistogram()->GetXaxis()->GetFirst()),
+        dInfo.fYAxis_Max,
+        graph_DetGain_v_Imon->GetHistogram()->GetBinLowEdge(graph_DetGain_v_Imon->GetHistogram()->GetXaxis()->GetLast()),
+        dInfo.fYAxis_Max,
+        func_Imon_v_VDrift->GetName(),510,"-"
+    );
+    
+    axis_VDrift->SetLabelSize(0.03);
+    axis_VDrift->SetLabelOffset(0.001);
+    //axis_VDrift->SetTextSize(0.03);
+    axis_VDrift->SetTextSize(3);
+    axis_VDrift->SetTitle("Drift Potential #left(V#right)");
+    axis_VDrift->SetTitleOffset(0.95);
+    
+    axis_VDrift->Draw("");
+    
+    //Draw Rate Plot
+    //------------------------------------------------------
+    //Set Style - Rate Graph
+    float fMaxRate      = vec_InputData[vec_InputData.size()-1].fRate;
+    float fMaxRateScale = fMaxRate + (1000 - ( (int) std::floor(fMaxRate) % (int) 1000 ) );
+    
+    graph_DetRate_v_Imon->GetYaxis()->SetRangeUser(0,fMaxRateScale);
+    graph_DetRate_v_Imon->GetYaxis()->SetTitle("Rate #left(Hz#right)");
+    graph_DetRate_v_Imon->GetYaxis()->SetTitleOffset(1.7);
+    
+    graph_DetRate_v_Imon->GetXaxis()->SetTitle("HV Divider Current #left(#muA#right)");
+    
+    graph_DetRate_v_Imon->SetLineColor(kGreen+1);
+    graph_DetRate_v_Imon->SetLineWidth(2);
+    
+    graph_DetRate_v_Imon->SetMarkerColor(kGreen+1);
+    graph_DetRate_v_Imon->SetMarkerStyle(23);
+    
+    //Set Style - Transparent Pad Overlay
+    cDetector->cd();
+    TPad *pad_Overlay = new TPad("pad_Overlay","",0,0,1,1);
+    pad_Overlay->SetFrameFillStyle(4000);
+    pad_Overlay->SetFillColor(0);
+    pad_Overlay->SetFillStyle(4000);
+    pad_Overlay->SetRightMargin(0.125);
+    pad_Overlay->Draw();
+    
+    //Draw the Rate Plot
+    pad_Overlay->cd();
+    graph_DetRate_v_Imon->Draw("APY+");
+    cDetector->Modified();
+    cDetector->Update();
+    
+    //Draw the Legend
+    //------------------------------------------------------
+    TLegend *leg = new TLegend(0.525,0.15,0.825,0.35);
+    leg->SetLineColor(kBlack);
+    leg->SetFillColor(kWhite);
+    
+    leg->AddEntry(graph_DetGain_v_Imon, "Gain - Data", "LPE" );
+    leg->AddEntry(func_Gain_v_Imon, "Gain - Fit", "L");
+    leg->AddEntry(graph_DetRate_v_Imon, "Rate - Data", "LPE" );
+    
+    leg->Draw("same");
+    
+    //Draw the Summary Pave
+    //------------------------------------------------------
+    TLatex *tex_Name        = new TLatex(); tex_Name->SetTextSize(0.03);
+    TLatex *tex_GapConfig   = new TLatex(); tex_GapConfig->SetTextSize(0.03);
+    TLatex *tex_Gas         = new TLatex(); tex_Gas->SetTextSize(0.03);
+    TLatex *tex_Ambient_P   = new TLatex(); tex_Ambient_P->SetTextSize(0.03);
+    TLatex *tex_Ambient_T   = new TLatex(); tex_Ambient_T->SetTextSize(0.03);
+    TLatex *tex_Source      = new TLatex(); tex_Source->SetTextSize(0.03);
+    
+    tex_Name->DrawLatexNDC(0.13,0.85, dInfo.strName.c_str() );
+    tex_GapConfig->DrawLatexNDC(0.13,0.81, dInfo.strGapConfig.c_str() );
+    tex_Gas->DrawLatexNDC(0.13,0.77, dInfo.strGas.c_str() );
+    tex_Ambient_P->DrawLatexNDC(0.13,0.73, dInfo.strPressure.c_str() );
+    tex_Ambient_T->DrawLatexNDC(0.13,0.69, dInfo.strTemp.c_str() );
+    tex_Source->DrawLatexNDC(0.13,0.65, dInfo.strSource.c_str() );
+    
+    for (int i=0; i < dInfo.vec_strSourceInfo.size(); ++i) {
+        TLatex *tex_SourceInfo = new TLatex();
+        
+        tex_SourceInfo->SetName( ("tex_SourceInfo_" + getString(i) ).c_str() );
+        
+        tex_SourceInfo->SetTextSize(0.03);
+        
+        tex_SourceInfo->DrawLatexNDC(0.13,0.61 - i*0.04, dInfo.vec_strSourceInfo[i].c_str() );
+    }
+    
+    //Store Plots
+    //------------------------------------------------------
+    //Make the Output Root File Name
+    string strOutputFileName = vec_strInputArgs[1];
+    
+    if (strOutputFileName.find(".txt") != string::npos ) {
+        strOutputFileName.erase(strOutputFileName.find(".txt"), strOutputFileName.length() - strOutputFileName.find(".txt") );
+        strOutputFileName = strOutputFileName + ".root";
+    }
+    else{
+        strOutputFileName = "GainCal_Output.root";
+    }
+    
+    //Get the Output Root File
+    cout<<"Enter the following command in terminal:\n";
+    cout<<"root -l " << strOutputFileName.c_str() << endl;
+    TFile *file_ROOT_Output = getFile(strOutputFileName, "RECREATE", bExitSuccess, bVerbose_IO);
+    
+    if (!bExitSuccess) { //Case: Output File Was Not Created Successfully
+        if(bVerbose_IO) {
+            cout<< ("main() - Output ROOT File: " + strOutputFileName + " was not successfully created, stopping\n").c_str();
+            cout<<"main() - Please Cross-Check (Maybe you do not have write-permission in working directory or filepath does not exist???)"<<endl;
+        }
+        
+        return -2;
+    } //End Case: Output File Was Not Created Successfully
+    
+    //Make Output Root File Active Directory
+    file_ROOT_Output->cd();
+    
+    //Write
+    //func_Imon_v_VDrift->Write();
+    TDirectory *dir_Graphs = file_ROOT_Output->mkdir("Graphs");
+    dir_Graphs->cd();
+    graph_DetGain_v_Imon->Write();
+    graph_DetGain_v_VDrift->Write();
+    
+    graph_DetRate_v_Imon->Write();
+    graph_DetRate_v_VDrift->Write();
+    
+    TDirectory *dir_Funcs = file_ROOT_Output->mkdir("Functions");
+    dir_Funcs->cd();
+    func_Gain_v_Imon->Write();
+    func_Gain_v_VDrift->Write();
+    
+    file_ROOT_Output->cd();
+    cDetector->Write();
+    
+    //Close the File
+    file_ROOT_Output->Close();
+    
+    return 0;
+} //End main

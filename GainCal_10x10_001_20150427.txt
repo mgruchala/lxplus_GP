@@ -1,0 +1,28 @@
+[BEGIN_DET_INFO]
+Detector='GE1/1-IV-GIF';
+Gaps='3/2/2/2 mm';
+Source='Source: 55Fe';
+#SourceInfo='V_{source} = 30 kV'; #Duplicate this line for multiple source input
+#SourceInfo='I_{source} = 10 #muA'; #Duplicate this line for multiple source input
+Gas='Ar:CO2:CF4 (45:15:40)';
+Pressure='95.1[kPa]';
+Temperature='22.0^{#circ}C';
+Y_Range_Min='1e2'; #Minimum Gain Value for Y-Axis
+Y_Range_Max='1e5'; #Maximum Gain Value for Y-Axis
+[END_DET_INFO]
+[BEGIN_DATA]
+800	4148.26	11332	1.08E-008	10187.33	101.3
+790	4096.41	9117.03	8.29E-010	10264.33	101.65
+780	4044.55	6703.71	7.15E-010	10077	100.67
+770	3992.7	4793.53	4.36E-010	9916	99.81
+760	3940.85	3503.08	8.33E-010	9408	97.21
+750	3888.99	2540.98	6.05E-010	8333.67	91.47
+740	3837.14	1821.35	2.56E-010	2056.33	45.76
+730	3785.29	1367.13	3.33E-010	99.33	11.6
+720	3733.43	934.25	5.05E-010	5	5.6
+710	3681.58	808.75	4.66E-010	1.33	5.26
+700	3629.73	526.6	3.91E-010	1	4.83
+690	3577.87	431.73	2.92E-010	0	4.43
+
+
+[END_DATA]
